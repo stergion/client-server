@@ -30,6 +30,8 @@
 #define CIRCULAR_BUFFER_SIZE    2000
 #define TOTAL_MESSAGES_RECV     2000000 // 2.000.000
 
+pthread_mutex_t mutex_cbuf;
+
 FILE *fd_find_msg_time;
 uint64_t total_messages_recv = 0;
 
@@ -167,6 +169,8 @@ int main(int argc, char const *argv[])
 
 
 //========== start server, client and message creator =============
+  pthread_mutex_init(&mutex_cbuf, NULL);
+
   fd_find_msg_time = fopen("find_msg_time.txt", "w");
   if (fd_find_msg_time == NULL)
   {
@@ -192,7 +196,9 @@ int main(int argc, char const *argv[])
     gettimeofday(&tv, NULL);
     newmsg.timestamp = tv.tv_sec * 1000000 + tv.tv_usec;
 
-    circular_buf_push(cbuf, newmsg);
+    pthread_mutex_lock(&mutex_cbuf);     // wait till mutex is unlocked, then lock mutex
+    circular_buf_push(cbuf, newmsg);     // push to circular buffer
+    pthread_mutex_unlock(&mutex_cbuf);   // unlock mutex
     // usleep((random()%240000000 + 60000000)); // sleep for 60 - 300 seconds
     // sleep(2);
 
@@ -205,11 +211,12 @@ int main(int argc, char const *argv[])
   pthread_join(server_tid, NULL);
   pthread_join(client_tid, NULL);
 
+  pthread_mutex_destroy(&mutex_cbuf);
+
   print_circular_buffer(cl_data.cbuf);
   print_buffer_status(cbuf);
 
   fclose(fd_find_msg_time);
-
   //=================================================================
 
 
@@ -276,6 +283,9 @@ void save_data_to_circular_buffer(cbuf_handle_t cbuf, char *data, char *myaem)
 
   if (strcmp(aem_rcvr, myaem) != 0) {
     gettimeofday(&tv_start, NULL);
+
+    pthread_mutex_lock(&mutex_cbuf);    // lock mutex of circular buffer
+
     rv = circular_buffer_find_msg(cbuf, data);
     gettimeofday(&tv_end, NULL);
 
@@ -285,7 +295,6 @@ void save_data_to_circular_buffer(cbuf_handle_t cbuf, char *data, char *myaem)
 
     if (rv == -1) { // data is not duplicate
       // printf("client: message '%s' was saved\n", data);
-
 
       strcpy(msg.msg, data);
       // printf("client: Recieved message:%s\n", msg.msg);
@@ -297,6 +306,8 @@ void save_data_to_circular_buffer(cbuf_handle_t cbuf, char *data, char *myaem)
     } else if (rv != -1) {
       printf("client: message '%s' duplicate\n", data);
     }
+
+    pthread_mutex_unlock(&mutex_cbuf);    // unlock mutex of circular buffer
   } else {
     printf("client: reciever is me: '%s'\n" \
             "cliend: message '%s' was not saved in circular buffer\n", aem_rcvr, data);
@@ -380,11 +391,13 @@ void *start_client(void *cl_data)
 
         if (numbytes == BUFFER_SIZE-1) { // save data only if are fully sent
           total_messages_recv++;
+
           gettimeofday(&tv_start, NULL);
           save_data_to_circular_buffer(  ((client_data*)cl_data)->cbuf,
                                         buf,
                                         ((client_data*)cl_data)->myaem);
           gettimeofday(&tv_end, NULL);
+
           fprintf(fd_save_msg_time, "duration(usec): %lu\n",
                                             (tv_end.tv_sec * 1000000 + tv_end.tv_usec)
                                            -(tv_start.tv_sec * 1000000 + tv_start.tv_usec));
@@ -397,7 +410,7 @@ void *start_client(void *cl_data)
     if (total_messages_recv > TOTAL_MESSAGES_RECV) {
       break;
     }
-    printf("%"PRIu64"\n", total_messages_recv);
+    printf("client: Total messages received: %"PRIu64"\n", total_messages_recv);
   } // END while(1)
 
   fclose(fd_save_msg_time);
@@ -551,8 +564,8 @@ void *start_server(void *server_data)
             peerptr = find_peer_of_ipv4(peer_list, pl_size, remoteIP);
 
             if (peerptr == NULL) {
-              printf("server: peer '%s:%d' is not in the list\n", remoteIP, newfd);
-              printf("server: peer '%s:%d' was disconnected\n", remoteIP, newfd);
+              printf("server: IP '%s' is not in the list\n", remoteIP);
+              printf("server: IP '%s' was disconnected\n", remoteIP);
                      close(newfd);
             } else {
               FD_SET(newfd, &master_r); // add to master_r set
@@ -649,6 +662,8 @@ int send_to_peer(peer_t *peer, cbuf_handle_t cbuf)
 
   // print_peer(peer);
 
+  pthread_mutex_lock(&mutex_cbuf);    // lock mutex of circular Buffer
+
   if (circular_buf_empty(cbuf)) {
     fprintf(stderr, "send_to_peer: Circular Buffer is empty\n");
     return -3;
@@ -676,6 +691,8 @@ int send_to_peer(peer_t *peer, cbuf_handle_t cbuf)
       return -1;
     }
   }
+
+  pthread_mutex_unlock(&mutex_cbuf);    // unlock mutex of circular Buffer
 
   if (msg_to_send.timestamp > 0) {
     memset(buf,'\0', BUFFER_SIZE);
