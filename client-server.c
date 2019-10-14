@@ -283,7 +283,7 @@ void save_data_to_circular_buffer(cbuf_handle_t cbuf, char *data, char *myaem)
                                       (tv_end.tv_sec * 1000000 + tv_end.tv_usec)
                                      -(tv_start.tv_sec * 1000000 + tv_start.tv_usec));
 
-    if (rv == -1) { // data is not duplicate
+    if (rv == -2) { // data is not duplicate
       // printf("client: message '%s' was saved\n", data);
 
 
